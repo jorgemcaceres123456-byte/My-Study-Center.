@@ -39,6 +39,18 @@ npm run typecheck
 
 Ya está todo incluido: `vercel.json`, `.vercelignore`, `.env.example` y `api/ai.mjs`.
 
+### 🚨 Si sale 404 en producción
+
+El 404 aparece cuando Vercel despliega una rama **sin `index.html`** (este repo empezó con solo `README.md`) o cuando el proyecto apunta a un directorio equivocado. Comprueba en el panel de Vercel:
+
+1. **Project → Settings → Git → Production Branch = `main`** (y haz merge/push de la app a `main`).
+2. **Settings → General → Root Directory = `./`** (la raíz del repo, donde están `package.json`, `index.html` y `vercel.json`). Si el Root Directory apunta a una carpeta que no existe, el build "tiene éxito" pero no produce archivos y todo da 404.
+3. **Settings → General**: Framework `Vite`, Build Command `npm run build`, Output Directory `dist`, Install Command `npm install`.
+4. **Settings → Deployment Protection**: desactiva *Vercel Authentication* para Production si quieres que la URL sea pública. Si está activa verás una pantalla de login / *Protected Deployment* en lugar de la app.
+5. Abre la URL que aparece en **Project → Domains**. Ojo: `my-study-center.vercel.app` pertenece a **otro sitio**; tu dominio generado lleva el sufijo del equipo (por ejemplo `my-study-center-jorgemcaceres123456-bytes-projects.vercel.app`).
+
+> Si la conexión de Vercel en Arena usa una cuenta o un token con alcance limitado (ver `validate_credential`), estos ajustes solo se pueden cambiar desde el panel de Vercel. El push a `main` sí dispara el deploy automáticamente.
+
 ### Opción A · Importar el repo (recomendado)
 1. Sube esta rama a GitHub.
 2. En Vercel → **Add New → Project → Import Git Repository**.
