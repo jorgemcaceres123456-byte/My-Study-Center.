@@ -1,17 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { AppState, StudyImage } from '../types';
+import type { AppState, EnglishLevel, StudyImage } from '../types';
 import { createDemoState, createEmptyState, defaultSettings, SAMPLE_NOTES } from '../data/defaults';
 import { safeJson } from '../lib/utils';
 import { clearBlobs, seedSampleNotes } from '../lib/imageStore';
+import { ensureTutors } from '../lib/tutors';
 
-/** v2 = arranque vacío (sin datos precargados). */
-const STORAGE_KEY = 'my-study-center:v2';
+/** v3 = tutores por materia + ejercicios diarios. */
+const STORAGE_KEY = 'my-study-center:v3';
 
 interface StoreValue {
   state: AppState;
   update: (recipe: (draft: AppState) => void) => void;
   replace: (next: AppState) => void;
-  /** Carga los datos de demostración (solo bajo petición explícita del usuario). */
   loadDemo: () => void;
   clearAll: () => void;
   storageError: string | null;
@@ -21,9 +21,13 @@ const StoreContext = createContext<StoreValue | null>(null);
 
 function normalize(raw: Partial<AppState> | null): AppState {
   const base = createEmptyState();
-  return {
+  const legacy = Array.isArray(raw?.messages) ? raw.messages : [];
+  const next: AppState = {
     ...base,
     subjects: Array.isArray(raw?.subjects) ? raw.subjects : [],
+    tutors: Array.isArray(raw?.tutors) ? raw.tutors : [],
+    tutorMessages: raw?.tutorMessages && typeof raw.tutorMessages === 'object' ? { ...raw.tutorMessages } : {},
+    messages: [],
     tasks: Array.isArray(raw?.tasks) ? raw.tasks : [],
     images: Array.isArray(raw?.images)
       ? raw.images.map((i) => ({ ...i, sentToAi: i.sentToAi ?? false })) as StudyImage[]
@@ -34,20 +38,30 @@ function normalize(raw: Partial<AppState> | null): AppState {
     activeSession: raw?.activeSession ?? null,
     events: Array.isArray(raw?.events) ? raw.events : [],
     habits: Array.isArray(raw?.habits) ? raw.habits : [],
-    messages: Array.isArray(raw?.messages) ? raw.messages : [],
+    quizzes: Array.isArray(raw?.quizzes) ? raw.quizzes : [],
+    quizAttempts: raw?.quizAttempts && typeof raw.quizAttempts === 'object' ? { ...raw.quizAttempts } : {},
+    englishLevel: (['A1','A2','B1','B2','C1','C2'] as EnglishLevel[]).includes(raw?.englishLevel as EnglishLevel) ? raw!.englishLevel as EnglishLevel : 'B1',
     pentagonSubjectIds: Array.isArray(raw?.pentagonSubjectIds) ? raw.pentagonSubjectIds : [],
     settings: { ...defaultSettings, ...(raw?.settings || {}) },
     accent: raw?.accent === 'ocean' || raw?.accent === 'sunset' ? raw.accent : 'aurora',
     notificationsEnabled: Boolean(raw?.notificationsEnabled),
     seeded: Boolean(raw?.seeded),
   };
+  ensureTutors(next);
+  // Migración de chats de la v2: pasan al primer tutor para no perderlos.
+  if (legacy.length && !Object.values(next.tutorMessages).some((m) => m.length)) {
+    const first = next.tutors[0];
+    if (first) next.tutorMessages[first.id] = legacy.slice(-60);
+  }
+  return next;
 }
 
 function load(): AppState {
   const raw = safeJson<Partial<AppState> | null>(localStorage.getItem(STORAGE_KEY), null);
-  // Primera visita: NADA precargado. Materias, hábitos, proyectos y sesiones
-  // los crea el usuario manualmente.
-  return raw ? normalize(raw) : createEmptyState();
+  if (raw) return normalize(raw);
+  // Migración suave desde la v2 (si existía).
+  const old = safeJson<Partial<AppState> | null>(localStorage.getItem('my-study-center:v2'), null);
+  return old ? normalize(old) : createEmptyState();
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -58,7 +72,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setState((prev) => {
       const draft: AppState = structuredClone(prev);
       recipe(draft);
-      return draft;
+      return ensureTutors(draft);
     });
   }, []);
 
@@ -103,7 +117,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<StoreValue>(
     () => ({ state, update, replace, loadDemo, clearAll, storageError }),
-    [state, update, replace, loadDemo, clearAll, storageError],
+    [state, update, replace, loadDemo, storageError],
   );
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

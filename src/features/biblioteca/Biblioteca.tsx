@@ -8,7 +8,8 @@ import { useStore } from '../../state/store';
 import { useToast } from '../../state/toast';
 import { deleteBlob, getBlob } from '../../lib/imageStore';
 import { KIND_LABEL } from '../../lib/files';
-import type { LibraryKind } from '../../types';
+import { allTutorMessages } from '../../lib/tutors';
+import type { ID, LibraryKind } from '../../types';
 import { downloadBlob, formatBytes, shortDate } from '../../lib/utils';
 import type { SectionId } from '../../types';
 
@@ -36,7 +37,7 @@ const KIND_ICON: Record<LibraryKind, typeof FileImage> = {
   pptx: Presentation, txt: FileText, audio: FileAudio2, file: FileArchive,
 };
 
-export function Biblioteca({ onNavigate, compact = false }: { onNavigate?: (s: SectionId) => void; compact?: boolean }) {
+export function Biblioteca({ onNavigate, compact = false, subjectId }: { onNavigate?: (s: SectionId) => void; compact?: boolean; subjectId?: ID | '' }) {
   const { state, update } = useStore();
   const toast = useToast();
   const [filter, setFilter] = useState<'all' | 'images' | 'docs' | 'audio'>('all');
@@ -44,6 +45,7 @@ export function Biblioteca({ onNavigate, compact = false }: { onNavigate?: (s: S
   const [preview, setPreview] = useState<Entry | null>(null);
   const [deleting, setDeleting] = useState<Entry | null>(null);
 
+  const allMessages = useMemo(() => allTutorMessages(state), [state.tutorMessages]);
   const entries = useMemo<Entry[]>(() => {
     const fromImages: Entry[] = state.images.map((i) => ({
       id: `img-${i.id}`, refId: i.id, name: i.name, mime: i.mime, size: i.size,
@@ -57,21 +59,22 @@ export function Biblioteca({ onNavigate, compact = false }: { onNavigate?: (s: S
       createdAt: f.createdAt, sentToAi: true, summary: f.extractedText.slice(0, 400),
       notes: f.notes, subjectId: f.subjectId, origin: 'file',
     }));
-    const generated: Entry[] = state.messages.filter((m) => m.imageKey).map((m) => ({
+    const generated: Entry[] = allMessages.filter((m) => m.imageKey).map((m) => ({
       id: `gen-${m.id}`, refId: m.id, name: 'Imagen generada por IA', mime: 'image/png', size: 0,
       blobKey: m.imageKey!, kind: 'image', source: 'generada', createdAt: m.createdAt,
-      sentToAi: false, summary: '', notes: '', subjectId: '', origin: 'message',
+      sentToAi: false, summary: '', notes: '', subjectId: m.subjectId || '', origin: 'message',
     }));
-    const audios: Entry[] = state.messages.flatMap((m) => (m.audios || []).map((a) => ({
+    const audios: Entry[] = allMessages.flatMap((m) => (m.audios || []).map((a) => ({
       id: `audio-${a.id}`, refId: a.id, name: a.name, mime: a.mime, size: 0,
       blobKey: a.blobKey, kind: 'audio' as LibraryKind, source: 'audio' as Source,
       createdAt: m.createdAt, sentToAi: true, summary: a.transcript,
-      notes: '', subjectId: '', origin: 'message' as const,
+      notes: '', subjectId: a.subjectId || '', origin: 'message' as const,
     })));
     return [...fromImages, ...fromFiles, ...generated, ...audios].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [state.images, state.chatFiles, state.messages]);
+  }, [state.images, state.chatFiles, allMessages]);
 
   const visible = entries.filter((e) => {
+    if (subjectId && e.subjectId !== subjectId) return false;
     if (filter === 'images' && e.kind !== 'image') return false;
     if (filter === 'docs' && !['pdf', 'docx', 'xlsx', 'pptx', 'txt', 'file'].includes(e.kind)) return false;
     if (filter === 'audio' && e.kind !== 'audio') return false;
@@ -81,7 +84,7 @@ export function Biblioteca({ onNavigate, compact = false }: { onNavigate?: (s: S
 
   const sendToChat = (e: Entry) => {
     onNavigate?.('chat');
-    window.setTimeout(() => window.dispatchEvent(new CustomEvent('msc:chat-attach', { detail: e.refId })), 100);
+    window.setTimeout(() => window.dispatchEvent(new CustomEvent('msc:chat-attach', { detail: { refId: e.refId, subjectId: e.subjectId } })), 100);
   };
 
   const download = async (e: Entry) => {
@@ -97,8 +100,8 @@ export function Biblioteca({ onNavigate, compact = false }: { onNavigate?: (s: S
         d.images = d.images.filter((i) => i.id !== e.refId);
         d.memories = d.memories.filter((m) => m.imageId !== e.refId);
       } else if (e.origin === 'file') d.chatFiles = d.chatFiles.filter((f) => f.id !== e.refId);
-      else if (e.kind === 'audio') d.messages.forEach((m) => { m.audios = m.audios?.filter((a) => a.id !== e.refId); });
-      else d.messages = d.messages.filter((m) => m.id !== e.refId);
+      else if (e.kind === 'audio') Object.values(d.tutorMessages).forEach((list) => list.forEach((m) => { m.audios = m.audios?.filter((a) => a.id !== e.refId); }));
+      else Object.keys(d.tutorMessages).forEach((tid) => { d.tutorMessages[tid] = d.tutorMessages[tid].filter((m) => m.id !== e.refId); });
     });
     void deleteBlob(e.blobKey).catch(() => undefined);
     toast('info', 'Archivo eliminado de la biblioteca');
@@ -106,14 +109,14 @@ export function Biblioteca({ onNavigate, compact = false }: { onNavigate?: (s: S
 
   const head = compact ? (
     <div className="biblio-compact-head">
-      <strong>📚 Biblioteca</strong><span>{entries.length} archivos · {state.memories.length} recuerdos de la IA</span>
+      <strong>📚 Biblioteca{subjectId ? ' de esta materia' : ''}</strong><span>{visible.length} archivos · {state.memories.filter((m) => !subjectId || m.subjectId === subjectId).length} recuerdos del tutor</span>
     </div>
   ) : (
     <>
       <SectionHeader eyebrow="Historial completo" title="Biblioteca" description="Todas las imágenes y archivos que le has mandado a la IA: fotos del cuaderno, PDFs, Word, Excel, PowerPoint, audios e imágenes generadas." actions={<Button variant="primary" icon={<Images size={16} />} onClick={() => onNavigate?.('library')}>Subir fotos / apuntes</Button>} />
       <div className="library-info glass">
         <div className="library-info__icon"><BrainCircuit size={22} /></div>
-        <div><strong>{state.memories.length} páginas guardadas en la memoria de la IA</strong><span>Lo que la IA aprende al analizar tus fotos se recuerda automáticamente en el chat, aunque no vuelvas a adjuntar la imagen. Puedes ver cada recuerdo en la tarjeta del archivo.</span></div>
+        <div><strong>{state.memories.length} páginas guardadas en las memorias de los tutores</strong><span>Cada recuerdo pertenece a una sola materia: solo el tutor de esa carpeta lo ve en su chat, aunque no vuelvas a adjuntar la imagen. Puedes ver cada recuerdo en la tarjeta del archivo.</span></div>
         <Button size="sm" onClick={() => onNavigate?.('chat')}>Ir al chat <Send size={14} /></Button>
       </div>
     </>

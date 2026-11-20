@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Bell, BellRing, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock,
+  Bell, BellRing, BrainCircuit, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock,
   Pencil, Plus, Trash2, TriangleAlert,
 } from 'lucide-react';
 import { Button, Chip, ConfirmModal, EmptyState, Field, GlassCard, IconButton, Modal, SectionHeader } from '../../components/ui';
@@ -92,7 +92,7 @@ export function Calendar() {
 
   return (
     <div className="view">
-      <SectionHeader eyebrow="Agenda académica" title="Calendario de entregas" description="Agrega manualmente trabajos, tareas, proyectos y exámenes con fecha, hora y recordatorios." actions={<>
+      <SectionHeader eyebrow="Agenda académica" title="Calendario de entregas" description="Agrega manualmente trabajos, tareas, proyectos y exámenes con fecha, hora y recordatorios. Si eliges una materia, solo su tutor IA sabrá de esta entrega." actions={<>
         <Button icon={state.notificationsEnabled ? <BellRing size={16} /> : <Bell size={16} />} onClick={() => void enableNotifications()}>{state.notificationsEnabled ? 'Notificaciones activas' : 'Activar notificaciones'}</Button>
         <Button variant="primary" icon={<Plus size={16} />} onClick={() => openNew(fromKey(selectedDay))}>Nueva entrega</Button>
       </>} />
@@ -179,7 +179,7 @@ export function Calendar() {
             <Field label="Fecha y hora"><input className="input" type="datetime-local" value={editing.date} onChange={(e) => setEditing({ ...editing, date: e.target.value, firedReminders: [] })} /></Field>
             <Field label="Tipo"><select className="select" value={editing.type} onChange={(e) => setEditing({ ...editing, type: e.target.value as EventType })}>{EVENT_TYPES.map((t) => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}</select></Field>
           </div>
-          <Field label="Materia"><select className="select" value={editing.subjectId} onChange={(e) => setEditing({ ...editing, subjectId: e.target.value })}><option value="">General / sin materia</option>{state.subjects.map((s) => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}</select></Field>
+          <Field label="Materia" hint="El tutor de esta materia será el único que recuerde esta entrega."><div className="calendar-subject-notice"><BrainCircuit size={14} /> Solo el Tutor de la materia elegida verá esta tarea, examen o proyecto.</div><select className="select" value={editing.subjectId} onChange={(e) => setEditing({ ...editing, subjectId: e.target.value })}><option value="">General / sin materia</option>{state.subjects.map((s) => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}</select></Field>
           <Field label="Descripción"><textarea className="textarea" rows={3} value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} placeholder="Detalles, formato de entrega, enlaces…" /></Field>
           <Field label="Recordatorios" hint="Recibirás un aviso dentro de la app y, si das permiso, una notificación del navegador."><div className="reminder-grid">{REMINDER_OPTIONS.map((m) => {
             const active = editing.reminders.includes(m);

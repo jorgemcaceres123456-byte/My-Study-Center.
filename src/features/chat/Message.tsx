@@ -10,7 +10,7 @@ import { plainForSpeech, pauseSpeaking, resumeSpeaking, speak, stopSpeaking, tts
 import { copyText, formatBytes, fmtTime } from '../../lib/utils';
 import type { AudioRef, ChatMessage } from '../../types';
 
-export function Message({ message, imageNames }: { message: ChatMessage; imageNames?: Record<string, string> }) {
+export function Message({ message, imageNames, assistantName = 'Asistente de estudio' }: { message: ChatMessage; imageNames?: Record<string, string>; assistantName?: string }) {
   const toast = useToast();
   const { state } = useStore();
   const isUser = message.role === 'user';
@@ -22,7 +22,7 @@ export function Message({ message, imageNames }: { message: ChatMessage; imageNa
     <div className={`message ${isUser ? 'message--user' : 'message--ai'} ${message.error ? 'message--error' : ''}`}>
       <div className="message__avatar">{isUser ? <User size={16} /> : <Bot size={16} />}</div>
       <div className="message__bubble">
-        <div className="message__meta"><strong>{isUser ? 'Tú' : 'Asistente de estudio'}</strong><span>{fmtTime(new Date(message.createdAt))}</span></div>
+        <div className="message__meta"><strong>{isUser ? 'Tú' : assistantName}</strong><span>{fmtTime(new Date(message.createdAt))}</span></div>
         {message.imageKey && <BlobImage blobKey={message.imageKey} alt="Imagen generada por IA" className="message__image" />}
         {message.imageUrl && <img className="message__image" src={message.imageUrl} alt="Imagen generada por IA" referrerPolicy="no-referrer" />}
 

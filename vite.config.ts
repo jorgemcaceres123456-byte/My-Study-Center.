@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 /**
  * La clave se lee de `.env.local` (gitignored) para que el preview local funcione
  * al instante SIN que el secreto quede en un archivo del repositorio público.
- * En Vercel, con VITE_AI_PROXY=1, el cliente recibe '' y api/ai.js inyecta
+ * En Vercel, con VITE_AI_PROXY=1, el cliente recibe '' y api/ai.mjs inyecta
  * AI_API_KEY en el servidor.
  */
 export default defineConfig(({ mode }) => {
