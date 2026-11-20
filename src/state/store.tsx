@@ -4,9 +4,10 @@ import { createDemoState, createEmptyState, defaultSettings, SAMPLE_NOTES } from
 import { safeJson } from '../lib/utils';
 import { clearBlobs, seedSampleNotes } from '../lib/imageStore';
 import { ensureTutors } from '../lib/tutors';
+import { ensureAcademic } from '../lib/academic';
 
-/** v3 = tutores por materia + ejercicios diarios. */
-const STORAGE_KEY = 'my-study-center:v3';
+/** v4 = ciclo escolar, búsqueda web, streaming y respaldo de modelo. */
+const STORAGE_KEY = 'my-study-center:v4';
 
 interface StoreValue {
   state: AppState;
@@ -42,11 +43,14 @@ function normalize(raw: Partial<AppState> | null): AppState {
     quizAttempts: raw?.quizAttempts && typeof raw.quizAttempts === 'object' ? { ...raw.quizAttempts } : {},
     englishLevel: (['A1','A2','B1','B2','C1','C2'] as EnglishLevel[]).includes(raw?.englishLevel as EnglishLevel) ? raw!.englishLevel as EnglishLevel : 'B1',
     pentagonSubjectIds: Array.isArray(raw?.pentagonSubjectIds) ? raw.pentagonSubjectIds : [],
+    academic: raw?.academic ? { ...base.academic, ...raw.academic } : base.academic,
+    archives: Array.isArray(raw?.archives) ? raw.archives : [],
     settings: { ...defaultSettings, ...(raw?.settings || {}) },
     accent: raw?.accent === 'ocean' || raw?.accent === 'sunset' ? raw.accent : 'aurora',
     notificationsEnabled: Boolean(raw?.notificationsEnabled),
     seeded: Boolean(raw?.seeded),
   };
+  ensureAcademic(next);
   ensureTutors(next);
   // Migración de chats de la v2: pasan al primer tutor para no perderlos.
   if (legacy.length && !Object.values(next.tutorMessages).some((m) => m.length)) {
@@ -60,8 +64,10 @@ function load(): AppState {
   const raw = safeJson<Partial<AppState> | null>(localStorage.getItem(STORAGE_KEY), null);
   if (raw) return normalize(raw);
   // Migración suave desde la v2 (si existía).
-  const old = safeJson<Partial<AppState> | null>(localStorage.getItem('my-study-center:v2'), null);
-  return old ? normalize(old) : createEmptyState();
+  const old3 = safeJson<Partial<AppState> | null>(localStorage.getItem('my-study-center:v3'), null);
+  if (old3) return normalize(old3);
+  const old2 = safeJson<Partial<AppState> | null>(localStorage.getItem('my-study-center:v2'), null);
+  return old2 ? normalize(old2) : createEmptyState();
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -72,6 +78,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setState((prev) => {
       const draft: AppState = structuredClone(prev);
       recipe(draft);
+      ensureAcademic(draft);
       return ensureTutors(draft);
     });
   }, []);

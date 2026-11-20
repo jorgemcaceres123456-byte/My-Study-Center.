@@ -1,6 +1,7 @@
 import type { AppState, Subject, Task, CalendarEvent, Habit } from '../types';
 import { addDays, dateKey, toLocalInput, uid } from '../lib/utils';
 import { ensureTutors } from '../lib/tutors';
+import { createAcademicCycle, ensureAcademic } from '../lib/academic';
 
 /**
  * API Key solicitada por el usuario. Se inyecta en tiempo de BUILD desde
@@ -12,7 +13,9 @@ import { ensureTutors } from '../lib/tutors';
 export const EMBEDDED_API_KEY = __CLIENT_AI_KEY__;
 export const USE_PROXY = import.meta.env.VITE_AI_PROXY === '1';
 export const DEFAULT_API_KEY = EMBEDDED_API_KEY;
+export const DEFAULT_TAVILY_KEY = __CLIENT_TAVILY_KEY__;
 export const DEFAULT_MODEL = import.meta.env.VITE_AI_MODEL || 'nvidia/nemotron-3.5-super-vl:free';
+export const FALLBACK_MODEL = 'openrouter/free';
 
 export const SUBJECT_COLORS = ['#6ee7ff', '#a78bfa', '#5b9cff', '#f7a8d8', '#7ef0c1', '#ffc978', '#ff8f8f', '#c0a6ff'];
 export const SUBJECT_ICONS = ['📘', '🧮', '🧪', '🧠', '🌍', '💻', '📐', '🎨', '📚', '⚡', '🔬', '✍️'];
@@ -27,8 +30,11 @@ export const BASE_URLS: Record<AppState['settings']['provider'], string> = {
 export const defaultSettings: AppState['settings'] = {
   provider: 'openrouter',
   apiKey: DEFAULT_API_KEY,
+  tavilyKey: DEFAULT_TAVILY_KEY,
   baseUrl: BASE_URLS.openrouter,
   model: DEFAULT_MODEL,
+  fallbackModel: FALLBACK_MODEL,
+  webSearch: false,
   temperature: 0.6,
   vision: true,
   imageModel: 'google/gemini-2.5-flash-image-preview',
@@ -41,7 +47,7 @@ export const defaultSettings: AppState['settings'] = {
 };
 
 export const MODEL_SUGGESTIONS: Record<AppState['settings']['provider'], string[]> = {
-  openrouter: ['nvidia/nemotron-3.5-super-vl:free', 'google/gemini-2.0-flash-exp:free', 'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen2.5-vl-72b-instruct:free'],
+  openrouter: ['nvidia/nemotron-3.5-super-vl:free', 'openrouter/free', 'google/gemini-2.0-flash-exp:free', 'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen2.5-vl-72b-instruct:free'],
   openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'],
   gemini: ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
   custom: ['gpt-4o-mini', 'llama-3.3-70b', 'qwen2.5-72b', 'modelo-local'],
@@ -50,7 +56,7 @@ export const MODEL_SUGGESTIONS: Record<AppState['settings']['provider'], string[
 /** Estado inicial: COMPLETAMENTE VACÍO. Todo se crea manualmente. */
 export function createEmptyState(): AppState {
   return {
-    version: 3,
+    version: 4,
     subjects: [], tutors: [], tutorMessages: {}, messages: [],
     tasks: [], images: [], chatFiles: [], memories: [],
     sessions: [], activeSession: null, events: [], habits: [],
@@ -60,6 +66,8 @@ export function createEmptyState(): AppState {
     accent: 'aurora',
     notificationsEnabled: false,
     seeded: false,
+    academic: createAcademicCycle(),
+    archives: [],
   };
 }
 
@@ -134,7 +142,7 @@ export function createDemoState(): AppState {
     dates: offsets.map((o) => dateKey(addDays(now, -o))),
   }));
 
-  return ensureTutors({
+  return ensureAcademic(ensureTutors({
     ...createEmptyState(),
     subjects,
     tasks,
@@ -142,7 +150,7 @@ export function createDemoState(): AppState {
     habits,
     pentagonSubjectIds: ['s-math', 's-phys', 's-bio', 's-hist', 's-prog'],
     seeded: true,
-  });
+  }));
 }
 
 /** Pretty inline SVG "notes" used as editable sample pages in the library. */

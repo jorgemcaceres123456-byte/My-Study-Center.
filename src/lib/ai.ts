@@ -1,8 +1,10 @@
-import type { AISettings, AppState, ID } from '../types';
-import { USE_PROXY } from '../data/defaults';
+import type { AISettings, AppState, ID, ReasoningEffort } from '../types';
+import { FALLBACK_MODEL, USE_PROXY } from '../data/defaults';
+import { periodLabel } from './academic';
 import { blobToDataUrl } from './imageStore';
 import { dateKey, parseLocal, pct, plural, sessionStreak, shortDate } from './utils';
 import { resizeBlobForVision } from './files';
+import { appendOnline, isOpenRouter, needsModelFallback } from './web';
 
 export interface AttachedImage { mime: string; dataUrl: string }
 export interface ChatTurn {
@@ -12,10 +14,24 @@ export interface ChatTurn {
 }
 
 export class AIError extends Error {
-  constructor(message: string, public hint?: string) {
+  constructor(message: string, public hint?: string, public status?: number) {
     super(message);
     this.name = 'AIError';
   }
+}
+
+export interface CallAIOptions {
+  settings: AISettings;
+  turns: ChatTurn[];
+  signal?: AbortSignal;
+  onToken?: (chunk: string) => void;
+  /** Razonamiento: 'none' por defecto; 'medium/high' solo con foto del cuaderno o guía completa. */
+  reasoning?: ReasoningEffort;
+  /** Modelo explícito. Si se omite, usa settings.model y añade :online cuando corresponda. */
+  model?: string;
+  /** Búsqueda integrada de OpenRouter sin Tavily. */
+  online?: boolean;
+  onFallback?: (message: string) => void;
 }
 
 const ARTIFACT_RULES = `
@@ -30,11 +46,14 @@ Para guías de examen usa este orden: 1) conceptos clave, 2) resumen claro, 3) e
 Para métodos de estudio adapta la recomendación al tema, la dificultad y el tiempo disponible, y explica por qué ese método conviene.
 Nunca inventes haber visto el contenido de una imagen, PDF o archivo si no recibiste el contenido o su resumen; usa solo el contexto disponible.`;
 
+const cycleText = (state: AppState) => state.academic
+  ? periodLabel(state.academic)
+  : '7.º grado · Parcial 1';
 
 /**
  * Prompt de un TUTOR DE MATERIA. Aislamiento estricto:
- * solo ve apuntes, memorias, archivos, tareas y entregas de SU materia.
- * Nunca recibe los nombres ni los contenidos de las demás materias.
+ * solo ve apuntes, memorias, archivos, tareas y entregas de SU materia y
+ * SOLO del ciclo/parcial activo. Los anteriores quedan archivados.
  */
 export function buildTutorSystemPrompt(state: AppState, subjectId: ID): string {
   const subject = state.subjects.find((x) => x.id === subjectId);
@@ -70,6 +89,8 @@ export function buildTutorSystemPrompt(state: AppState, subjectId: ID): string {
 - NO conoces el contenido de ninguna otra materia. No inventes, no mezcles, no cites ni compares con otras materias.
 - Si te preguntan por otra materia o por apuntes que no están en tu memoria, responde con honestidad: «No tengo acceso a esa materia; abre su propio tutor en Chat de IA». Nunca respondas usando datos de otras materias.
 - El usuario sube las fotos de su cuaderno en «Fotos y apuntes» eligiendo la materia; las de ${subject.name} son las ÚNICAS que tú recuerdas.
+
+📚 CICLO ESCOLAR ACTIVO: ${cycleText(state)}. Los temas de parciales o años anteriores están ARCHIVADOS y separados: no los uses, no los mezcles y no los cites. Si el usuario finalizó un parcial/año, esta conversación empieza con temas nuevos.
 
 🧠 MEMORIA: las páginas analizadas quedan grabadas aquí. Recuérdalas en TODAS las conversaciones de este chat aunque no las adjunten de nuevo. Cita el nombre de la página cuando uses su contenido. Si te preguntan qué recuerdas, responde solo con tu memoria.
 
@@ -141,6 +162,8 @@ export function buildSystemPrompt(state: AppState, subjectId?: ID): string {
 
   return `Eres el asistente de estudio de "My Study Center". ${s.persona || 'Responde en español.'}
 
+📚 CICLO ESCOLAR ACTIVO: ${cycleText(state)}. Los temas de parciales/años anteriores están archivados y NO deben mezclarse con los actuales.
+
 REGLAS DE MEMORIA: el usuario sube fotos de su cuaderno ÚNICAMENTE desde la sección "Fotos y apuntes". Esas páginas se analizan y quedan grabadas en tu MEMORIA. Debes recordarlas y usarlas en CUALQUIER conversación del chat, aunque el usuario no las adjunte de nuevo. Cita la página por su nombre cuando uses su contenido. Si te preguntan qué recuerdas, responde a partir de la memoria y del historial de la biblioteca.
 
 CONTEXTO REAL DEL ESTUDIANTE (fecha de hoy: ${dateKey(new Date())}):
@@ -177,7 +200,7 @@ function endpoint(settings: AISettings) {
 function authHeaders(settings: AISettings): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   if (settings.apiKey.trim()) h.Authorization = `Bearer ${settings.apiKey.trim()}`;
-  if (/openrouter\.ai/i.test(settings.baseUrl) || settings.provider === 'openrouter') {
+  if (isOpenRouter(settings.baseUrl, settings.provider)) {
     if (typeof window !== 'undefined') {
       h['HTTP-Referer'] = window.location.origin;
       h['X-Title'] = 'My Study Center';
@@ -192,11 +215,11 @@ async function readableError(res: Response): Promise<AIError> {
     const j = await res.clone().json();
     detail = String(j?.error?.message || j?.message || j?.error || '').slice(0, 300);
   } catch { detail = (await res.text().catch(() => '')).slice(0, 200); }
-  if (res.status === 401 || res.status === 403) return new AIError('API Key inválida o sin permisos.', 'Revisa la clave en Ajustes y que el modelo esté disponible en tu cuenta.');
-  if (res.status === 429) return new AIError('Límite de peticiones alcanzado.', 'Los modelos :free de OpenRouter tienen cuota; espera unos segundos o cambia de modelo.');
-  if (res.status === 404) return new AIError('Modelo o endpoint no encontrado.', 'Comprueba el nombre del modelo y la URL base en Ajustes.');
-  if (res.status >= 500) return new AIError('El proveedor de IA tuvo un error.', 'Inténtalo de nuevo en unos instantes.');
-  return new AIError(detail ? `Error ${res.status}: ${detail}` : `Error ${res.status} en la petición.`);
+  if (res.status === 401 || res.status === 403) return new AIError('API Key inválida o sin permisos.', 'Revisa la clave en Ajustes y que el modelo esté disponible en tu cuenta.', res.status);
+  if (res.status === 429) return new AIError('Límite de peticiones alcanzado.', 'Los modelos :free de OpenRouter tienen cuota; probaré el modelo de respaldo.', res.status);
+  if (res.status === 404) return new AIError('Modelo o endpoint no encontrado.', 'Comprueba el nombre del modelo y la URL base en Ajustes.', res.status);
+  if (res.status >= 500) return new AIError('El proveedor de IA tuvo un error.', 'Inténtalo de nuevo en unos instantes.', res.status);
+  return new AIError(detail ? `Error ${res.status}: ${detail}` : `Error ${res.status} en la petición.`, undefined, res.status);
 }
 
 function toOpenAIMessages(turns: ChatTurn[]) {
@@ -214,59 +237,21 @@ function toOpenAIMessages(turns: ChatTurn[]) {
   });
 }
 
-function chatBody(settings: AISettings, turns: ChatTurn[], stream: boolean) {
+/** Siempre stream:true. reasoning:none por defecto para mínima latencia. */
+function chatBody(settings: AISettings, turns: ChatTurn[], options: CallAIOptions) {
+  const model = options.model || settings.model;
+  const openRouter = isOpenRouter(settings.baseUrl, settings.provider);
   return {
-    model: settings.model,
+    model,
     messages: toOpenAIMessages(turns),
-    ...(/^o\d/.test(settings.model) ? {} : { temperature: settings.temperature }),
-    stream,
+    ...(/^o\d/.test(model) ? {} : { temperature: settings.temperature }),
+    stream: true,
+    ...(openRouter ? { reasoning: { effort: options.reasoning || 'none' } } : {}),
   };
 }
 
-/** Proxy serverless de Vercel: la clave queda en el servidor, nunca en el bundle. */
-export async function proxyRequest(settings: AISettings, path: string, body: unknown): Promise<unknown> {
-  let res: Response;
-  try {
-    res = await fetch('/api/ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseUrl: settings.baseUrl, path, body, extraHeaders: { 'HTTP-Referer': window.location.origin, 'X-Title': 'My Study Center' } }),
-    });
-  } catch {
-    throw new AIError('No se pudo contactar al proxy de IA (/api/ai).', 'Si estás en desarrollo local, desactiva VITE_AI_PROXY; en Vercel la función api/ai.mjs se despliega automáticamente.');
-  }
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new AIError(String(j?.error?.message || `Error ${res.status}`), 'Revisa AI_API_KEY en las variables de entorno de Vercel.');
-  return j;
-}
-
-async function proxyChat(settings: AISettings, turns: ChatTurn[], signal?: AbortSignal, onToken?: (c: string) => void): Promise<string> {
-  const j = await proxyRequest(settings, '/chat/completions', chatBody(settings, turns, false)) as { choices?: Array<{ message?: { content?: unknown } }> };
-  const content = j?.choices?.[0]?.message?.content;
-  const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((p: { text?: string }) => p.text || '').join('') : '';
-  if (!text) throw new AIError('El modelo no devolvió contenido.', 'Prueba con otro modelo en Ajustes.');
-  if (signal?.aborted) throw new DOMException('Abortado', 'AbortError');
-  onToken?.(text);
-  return text;
-}
-
-/** OpenAI-compatible streaming chat (OpenRouter, OpenAI, Ollama, LM Studio…). */
-async function openAICompatible(settings: AISettings, turns: ChatTurn[], signal?: AbortSignal, onToken?: (chunk: string) => void): Promise<string> {
-  const stream = Boolean(onToken);
-  const res = await fetch(endpoint(settings), {
-    method: 'POST', headers: authHeaders(settings), signal,
-    body: JSON.stringify(chatBody(settings, turns, stream)),
-  });
-  if (!res.ok) throw await readableError(res);
-
-  if (!stream || !res.body) {
-    const j = await res.json();
-    const text = j?.choices?.[0]?.message?.content;
-    if (typeof text === 'string') return text;
-    if (Array.isArray(text)) return text.map((p: { text?: string }) => p.text || '').join('');
-    throw new AIError('La respuesta del modelo no trajo texto.', 'Prueba con otro modelo en Ajustes.');
-  }
-
+async function consumeSSE(res: Response, onToken?: (chunk: string) => void, signal?: AbortSignal): Promise<string> {
+  if (!res.body) throw new AIError('El proveedor no devolvió un stream.', 'Revisa que el endpoint admita stream:true.');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -285,15 +270,18 @@ async function openAICompatible(settings: AISettings, turns: ChatTurn[], signal?
       } catch { /* keep-alive / marco parcial */ }
     }
   };
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split(/\r?\n\r?\n/);
-    buffer = parts.pop() || '';
-    parts.forEach(consume);
-  }
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() || '';
+      parts.forEach(consume);
+    }
+  } finally { reader.releaseLock?.(); }
   if (buffer.trim()) consume(buffer);
+  if (signal?.aborted) throw new DOMException('Abortado', 'AbortError');
   if (!full) {
     try {
       const j = JSON.parse(buffer);
@@ -303,6 +291,64 @@ async function openAICompatible(settings: AISettings, turns: ChatTurn[], signal?
     throw new AIError('El modelo no devolvió contenido.', 'Prueba de nuevo o cambia de modelo.');
   }
   return full;
+}
+
+/** Proxy serverless de Vercel: la clave queda en el servidor, nunca en el bundle. */
+export async function proxyRequest(settings: AISettings, path: string, body: unknown): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: settings.baseUrl, path, body, extraHeaders: { 'HTTP-Referer': window.location.origin, 'X-Title': 'My Study Center' } }),
+    });
+  } catch {
+    throw new AIError('No se pudo contactar al proxy de IA (/api/ai).', 'Si estás en desarrollo local, desactiva VITE_AI_PROXY; en Vercel la función api/ai.mjs se despliega automáticamente.');
+  }
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new AIError(String(j?.error?.message || `Error ${res.status}`), 'Revisa AI_API_KEY en las variables de entorno de Vercel.', res.status);
+  return j;
+}
+
+async function proxyChat(settings: AISettings, turns: ChatTurn[], signal?: AbortSignal, onToken?: (c: string) => void, options?: CallAIOptions): Promise<string> {
+  const body = chatBody(settings, turns, options || { settings, turns });
+  let res: Response;
+  try {
+    res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: settings.baseUrl, path: '/chat/completions', body, extraHeaders: { 'HTTP-Referer': window.location.origin, 'X-Title': 'My Study Center' } }),
+      signal,
+    });
+  } catch {
+    throw new AIError('No se pudo contactar al proxy de IA (/api/ai).', 'Revisa VITE_AI_PROXY y AI_API_KEY en Vercel.');
+  }
+  if (!res.ok) throw await readableError(res);
+  const contentType = res.headers?.get?.('content-type') || '';
+  if (res.body && (contentType.includes('text/event-stream') || body.stream)) return consumeSSE(res, onToken, signal);
+  const j = await res.json().catch(() => ({})) as { choices?: Array<{ message?: { content?: unknown } }> };
+  const content = j?.choices?.[0]?.message?.content;
+  const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((p: { text?: string }) => p.text || '').join('') : '';
+  if (!text) throw new AIError('El modelo no devolvió contenido.', 'Prueba con otro modelo en Ajustes.');
+  if (signal?.aborted) throw new DOMException('Abortado', 'AbortError');
+  onToken?.(text);
+  return text;
+}
+
+/** OpenAI-compatible streaming chat (OpenRouter, OpenAI, Ollama, LM Studio…). */
+async function openAICompatible(settings: AISettings, turns: ChatTurn[], signal?: AbortSignal, onToken?: (chunk: string) => void, options?: CallAIOptions): Promise<string> {
+  const body = chatBody(settings, turns, options || { settings, turns });
+  const res = await fetch(endpoint(settings), {
+    method: 'POST', headers: authHeaders(settings), signal,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await readableError(res);
+  if (res.body) return consumeSSE(res, onToken, signal);
+  const j = await res.json();
+  const text = j?.choices?.[0]?.message?.content;
+  if (typeof text === 'string') { onToken?.(text); return text; }
+  if (Array.isArray(text)) { const joined = text.map((p: { text?: string }) => p.text || '').join(''); onToken?.(joined); return joined; }
+  throw new AIError('La respuesta del modelo no trajo texto.', 'Prueba con otro modelo en Ajustes.');
 }
 
 /** Google Gemini REST API (non-streaming). */
@@ -330,18 +376,34 @@ async function gemini(settings: AISettings, turns: ChatTurn[], signal?: AbortSig
   return text;
 }
 
-export async function callAI(options: {
-  settings: AISettings; turns: ChatTurn[]; signal?: AbortSignal; onToken?: (chunk: string) => void;
-}): Promise<string> {
+export async function callAI(options: CallAIOptions): Promise<string> {
   const { settings, turns, signal, onToken } = options;
   if (!settings.apiKey.trim() && !USE_PROXY) {
-    throw new AIError('Falta la API Key.', 'Abre Ajustes → Inteligencia Artificial y pega tu clave. Se guarda solo en este navegador.');
+    throw new AIError('Falta la API Key.', 'Abre Ajustes → Inteligencia Artificial y pega tu OpenRouter API Key. Se guarda solo en este navegador.');
   }
   if (!settings.model.trim()) throw new AIError('Falta el modelo.', 'Escribe o elige un modelo en Ajustes.');
+
+  const primary = options.model || (options.online ? appendOnline(settings.model) : settings.model);
+  const fallbackBase = settings.fallbackModel || FALLBACK_MODEL;
+  const fallback = options.online ? appendOnline(fallbackBase) : fallbackBase;
+  const run = (model: string) => {
+    const opts: CallAIOptions = { ...options, model };
+    if (USE_PROXY && settings.provider !== 'gemini') return proxyChat(settings, turns, signal, onToken, opts);
+    if (settings.provider === 'gemini') return gemini({ ...settings, model }, turns, signal, onToken);
+    return openAICompatible(settings, turns, signal, onToken, opts);
+  };
+
   try {
-    if (USE_PROXY && settings.provider !== 'gemini') return await proxyChat(settings, turns, signal, onToken);
-    if (settings.provider === 'gemini') return await gemini(settings, turns, signal, onToken);
-    return await openAICompatible(settings, turns, signal, onToken);
+    try {
+      return await run(primary);
+    } catch (e) {
+      if ((e as Error).name === 'AbortError' || signal?.aborted) throw e;
+      if (needsModelFallback(e) && fallback !== primary) {
+        options.onFallback?.(`${primary} está saturado o agotó su límite; usando ${fallback}.`);
+        return await run(fallback);
+      }
+      throw e;
+    }
   } catch (e) {
     if (e instanceof AIError) throw e;
     if ((e as Error).name === 'AbortError') throw e;
@@ -353,17 +415,18 @@ export async function testConnection(settings: AISettings): Promise<string> {
   const text = await callAI({ settings, turns: [
     { role: 'system', content: 'Responde con una sola frase corta en español.' },
     { role: 'user', content: 'Confirma que la conexión funciona.' },
-  ] });
+  ], reasoning: 'none' });
   return text.slice(0, 160);
 }
 
 /** "Absorbe" una página: el modelo con visión lee la imagen y escribe un recuerdo durable. */
 export async function analyzeImage(settings: AISettings, blob: Blob, name: string, subjectName = ''): Promise<string> {
-  // Comprimimos antes de enviar: reduce coste y evita el límite de tamaño del proxy.
+  // Leer una foto del cuaderno SÍ activa razonamiento; el chat normal va con none.
   const small = await resizeBlobForVision(blob);
   const dataUrl = await blobToDataUrl(small);
   return callAI({
     settings: { ...settings, vision: true },
+    reasoning: 'medium',
     turns: [
       { role: 'system', content: 'Eres un asistente de apuntes. Analiza la imagen y devuelve en español: 1) un resumen detallado de 6-10 líneas del contenido (fórmulas, definiciones, esquemas, ejercicios, todo lo que veas), 2) los conceptos/temas clave separados por comas, 3) 3 preguntas de repaso. No uses bloques de código. Sé concreto y fiel a lo que ves. Este texto se guardará como memoria permanente para futuras conversaciones.' },
       { role: 'user', content: `Analiza esta página de mi cuaderno llamada "${name}"${subjectName ? `, de la materia ${subjectName}` : ''} y recuerda su contenido para futuras conversaciones con el tutor de esa materia.`, images: [{ mime: small.type || 'image/jpeg', dataUrl }] },

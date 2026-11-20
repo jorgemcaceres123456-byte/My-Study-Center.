@@ -182,13 +182,71 @@ export interface QuizAttempt {
   completedAt: string;
 }
 
+/* ───────── Ciclo escolar y archivo de temas ───────── */
+
+export interface AcademicCycle {
+  /** Grado actual. La app arranca en 7.º grado. */
+  grade: number;
+  /** Año de inicio del ciclo, p. ej. 2026 → 2026–2027. */
+  schoolYear: number;
+  /** Parcial actual (1, 2, 3…). */
+  partial: number;
+  periodId: ID;
+  startedAt: string;
+}
+
+export interface AcademicArchiveCounts {
+  images: number;
+  memories: number;
+  files: number;
+  tasks: number;
+  events: number;
+  quizzes: number;
+  messages: number;
+}
+
+export interface AcademicArchiveData {
+  images: StudyImage[];
+  memories: Memory[];
+  chatFiles: ChatFile[];
+  tasks: Task[];
+  events: CalendarEvent[];
+  quizzes: DailyQuiz[];
+  quizAttempts: Record<ID, QuizAttempt>;
+  tutorMessages: Record<ID, ChatMessage[]>;
+}
+
+export interface AcademicArchive {
+  id: ID;
+  kind: 'partial' | 'year';
+  label: string;
+  grade: number;
+  schoolYear: number;
+  partial: number;
+  periodId: ID;
+  closedAt: string;
+  counts: AcademicArchiveCounts;
+  topics: string[];
+  data: AcademicArchiveData;
+}
+
+/* ───────── IA ───────── */
+
 export type AIProvider = 'openrouter' | 'openai' | 'gemini' | 'custom';
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high';
 
 export interface AISettings {
   provider: AIProvider;
+  /** OpenRouter API Key. Se guarda solo en el almacenamiento local del navegador. */
   apiKey: string;
+  /** Tavily API Key opcional para búsqueda web gratuita. */
+  tavilyKey: string;
   baseUrl: string;
   model: string;
+  /** Respaldo automático cuando el principal da límite/saturación. */
+  fallbackModel: string;
+  /** Estado del interruptor "Buscar en la Web" del chat. Apagado por defecto. */
+  webSearch: boolean;
   temperature: number;
   vision: boolean;
   imageModel: string;
@@ -225,6 +283,10 @@ export interface AppState {
   accent: 'aurora' | 'ocean' | 'sunset';
   notificationsEnabled: boolean;
   seeded: boolean;
+  /** Ciclo escolar activo: arranca en 7.º grado, parcial 1. */
+  academic: AcademicCycle;
+  /** Temas de parciales/años anteriores, separados de tutores y quizzes. */
+  archives: AcademicArchive[];
 }
 
 export type SectionId =
@@ -234,6 +296,7 @@ export type SectionId =
   | 'biblioteca'
   | 'chat'
   | 'exercises'
+  | 'academic'
   | 'sessions'
   | 'calendar'
   | 'habits'
