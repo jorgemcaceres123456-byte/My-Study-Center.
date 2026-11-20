@@ -17,6 +17,7 @@ export function Settings() {
   const { state, update, replace, loadDemo, clearAll, storageError } = useStore();
   const toast = useToast();
   const [showKey, setShowKey] = useState(false);
+  const [showTavily, setShowTavily] = useState(false);
   const [testing, setTesting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -84,12 +85,27 @@ export function Settings() {
 
           <Field label="Proveedor"><Segmented value={s.provider} onChange={changeProvider} options={[{ value: 'openrouter', label: 'OpenRouter' }, { value: 'openai', label: 'OpenAI' }, { value: 'gemini', label: 'Gemini' }, { value: 'custom', label: 'Otro' }]} /></Field>
 
-          <Field label="API Key" hint={USE_PROXY ? 'Modo proxy activo: la clave vive en el servidor de Vercel (AI_API_KEY), no en el navegador.' : s.provider === 'gemini' ? 'Clave de Google AI Studio.' : 'Se envía como Authorization: Bearer … directamente al proveedor.'}>
+          <Field label="OpenRouter API Key (obligatoria)" hint={USE_PROXY ? 'Modo proxy activo: la clave vive en el servidor de Vercel (AI_API_KEY), no en el navegador.' : s.provider === 'gemini' ? 'Clave de Google AI Studio.' : 'Se guarda en el almacenamiento local de este navegador y se envía directo al proveedor.'}>
             <div className="key-input"><input className="input" type={showKey ? 'text' : 'password'} value={s.apiKey} onChange={(e) => set('apiKey', e.target.value)} placeholder={USE_PROXY ? 'Gestionada por /api/ai' : s.provider === 'gemini' ? 'AIza…' : 'sk-or-v1-…'} autoComplete="off" spellCheck={false} /><IconButton label={showKey ? 'Ocultar clave' : 'Mostrar clave'} onClick={() => setShowKey((v) => !v)}>{showKey ? <EyeOff size={16} /> : <Eye size={16} />}</IconButton></div>
           </Field>
 
+          <Field label="Tavily API Key (opcional · búsqueda web gratuita)" hint="Habilita búsqueda en internet en tiempo real desde el interruptor 🌐 Web del chat. Consíguela gratis en app.tavily.com.">
+            <div className="key-input"><input className="input" type={showTavily ? 'text' : 'password'} value={s.tavilyKey || ''} onChange={(e) => set('tavilyKey', e.target.value)} placeholder="tvly-…" autoComplete="off" spellCheck={false} /><IconButton label={showTavily ? 'Ocultar clave Tavily' : 'Mostrar clave Tavily'} onClick={() => setShowTavily((v) => !v)}>{showTavily ? <EyeOff size={16} /> : <Eye size={16} />}</IconButton></div>
+          </Field>
+
           <div className="form-row">
-            <Field label="Modelo" hint="Modelo con visión para leer las fotos del cuaderno."><input className="input" list="model-list" value={s.model} onChange={(e) => set('model', e.target.value)} placeholder="nvidia/nemotron-3.5-super-vl:free" /><datalist id="model-list">{MODEL_SUGGESTIONS[s.provider].map((m) => <option key={m} value={m} />)}</datalist></Field>
+            <Field label="Modelo principal" hint="Por defecto: nvidia/nemotron-3.5-super-vl:free (con visión).">
+              <select className="select" value={MODEL_SUGGESTIONS[s.provider].includes(s.model) ? s.model : '__custom__'} onChange={(e) => { if (e.target.value !== '__custom__') set('model', e.target.value); }}>
+                {MODEL_SUGGESTIONS[s.provider].map((m) => <option key={m} value={m}>{m}</option>)}
+                {!MODEL_SUGGESTIONS[s.provider].includes(s.model) && <option value="__custom__">{s.model} (personalizado)</option>}
+              </select>
+            </Field>
+            <Field label="Respaldo automático (fallback)" hint="Se usa si el principal da límite o saturación.">
+              <input className="input" value={s.fallbackModel || 'openrouter/free'} onChange={(e) => set('fallbackModel', e.target.value)} placeholder="openrouter/free" spellCheck={false} />
+            </Field>
+          </div>
+          <div className="form-row">
+            <Field label="Modelo personalizado (opcional)" hint="Escribe otro ID si no está en la lista."><input className="input" value={s.model} onChange={(e) => set('model', e.target.value)} placeholder="nvidia/nemotron-3.5-super-vl:free" spellCheck={false} /></Field>
             <Field label="Modelo de imágenes"><input className="input" value={s.imageModel} onChange={(e) => set('imageModel', e.target.value)} placeholder="google/gemini-2.5-flash-image-preview" /></Field>
           </div>
           <div className="form-row">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
-  AlertCircle, ArrowLeft, Bot, BrainCircuit, CalendarDays, Clipboard, FilePlus2, Files,
-  FolderOpen, ImagePlus, KeyRound, LibraryBig, Mic, Plus, Send, Settings2, Sparkles,
+  AlertCircle, ArrowLeft, Bot, BrainCircuit, CalendarDays, Clipboard, Files,
+  FolderOpen, Globe, ImagePlus, KeyRound, LibraryBig, Mic, Plus, Send, Settings2, Sparkles,
   Square, Trash2, Volume2, Wand2, X, LoaderCircle, GraduationCap, ChevronRight,
 } from 'lucide-react';
 import { Button, Chip, ConfirmModal, EmptyState, Field, IconButton, Markdown, Modal, BlobImage } from '../../components/ui';
@@ -17,7 +17,8 @@ import { KIND_LABEL, extractText, isVideo, kindOf } from '../../lib/files';
 import { markSentToAi } from '../../lib/memory';
 import { tutorIdFor } from '../../lib/tutors';
 import { formatBytes, formatClock, plural, uid } from '../../lib/utils';
-import type { AudioRef, ChatFile, ChatMessage, LibraryKind, SectionId } from '../../types';
+import { TAVILY_HINT, WebSearchError, extractSourceLinks, isBalanceError, sourcesToContext, sourcesToMarkdown, tavilySearch, type WebSource } from '../../lib/web';
+import type { AudioRef, ChatFile, ChatMessage, LibraryKind, ReasoningEffort, SectionId } from '../../types';
 
 const TUTOR_KEY = 'my-study-center:tutor';
 const defaultParams = (subject = ''): PromptParams => ({ type: 'method', subject, topic: '', difficulty: 'media', minutes: 60, raster: false });
@@ -60,6 +61,7 @@ export function Chat({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
+  const [searchingWeb, setSearchingWeb] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const [dictation, setDictation] = useState('');
@@ -98,6 +100,19 @@ export function Chat({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
     const el = scrollRef.current;
     if (el && tab === 'chat' && activeTutor && typeof el.scrollTo === 'function') el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [messages.length, stream, sending, tab, activeTutor]);
+
+  useEffect(() => {
+    if (!plusOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (plusRef.current && !plusRef.current.contains(e.target as Node)) setPlusOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [plusOpen]);
+
+  const toggleWebSearch = (next?: boolean) => update((d) => {
+    d.settings.webSearch = typeof next === 'boolean' ? next : !d.settings.webSearch;
+  });
 
   const selectTutor = (id: string) => {
     if (id !== activeTutorId) {
@@ -344,10 +359,10 @@ export function Chat({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
       for (const item of pendingItems) if (item.kind === 'image') visionBlobs.push(item.blob);
       if (visionBlobs.length) userTurn.images = await attachmentDataUrls(visionBlobs.slice(0, 6).map((blob) => ({ mime: blob.type || 'image/jpeg', blob })));
     }
-    const turns: ChatTurn[] = [
-      { role: 'system', content: buildSystemPrompt(state, sub.id) }, ...history,
-      { ...userTurn, content: userContent.slice(0, 30000) },
-    ];
+    const isGuide = /GUÍA DE EXAMEN COMPLETA/i.test(text);
+    const hasVisionImages = Boolean(userTurn.images?.length);
+    const reasoning: ReasoningEffort = hasVisionImages || isGuide ? 'medium' : 'none';
+    const baseSystem = buildSystemPrompt(state, sub.id);
 
     update((d) => {
       d.chatFiles.push(...fileRecords);
@@ -358,18 +373,64 @@ export function Chat({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
     setInput(''); setPendingImages([]); setPendingItems([]);
     setSending(true); setStream(''); streamRef.current = '';
     const controller = new AbortController(); abortRef.current = controller;
+
+    let webSources: WebSource[] = [];
+    let useOnline = false;
+    let systemPrompt = baseSystem;
+
+    if (settings.webSearch) {
+      setSearchingWeb(true);
+      if (settings.tavilyKey?.trim()) {
+        try {
+          webSources = await tavilySearch(text, settings.tavilyKey, controller.signal);
+          systemPrompt += sourcesToContext(webSources);
+        } catch (e) {
+          if ((e as Error).name === 'AbortError' || controller.signal.aborted) {
+            setSearchingWeb(false); setSending(false); setStream(''); abortRef.current = null;
+            return;
+          }
+          const msg = e instanceof WebSearchError ? e.message : 'No se pudo buscar en Tavily.';
+          toast('warning', 'Búsqueda web sin resultados', `${msg} Respondo sin internet.`);
+        }
+      } else {
+        useOnline = true;
+      }
+      setSearchingWeb(false);
+    }
+
+    const turns: ChatTurn[] = [
+      { role: 'system', content: systemPrompt }, ...history,
+      { ...userTurn, content: userContent.slice(0, 30000) },
+    ];
+
     try {
-      const result = await callAI({ settings, turns, signal: controller.signal, onToken: (chunk) => { streamRef.current += chunk; setStream(streamRef.current); } });
+      let result = await callAI({
+        settings, turns, signal: controller.signal, reasoning, online: useOnline,
+        onToken: (chunk) => { streamRef.current += chunk; setStream(streamRef.current); },
+        onFallback: (msg) => toast('info', 'Modelo de respaldo', msg),
+      });
+      if (webSources.length && !/https?:\/\//i.test(result)) {
+        result += sourcesToMarkdown(webSources);
+      } else if (useOnline && !/\]\(https?:\/\//i.test(result)) {
+        const extracted = extractSourceLinks(result);
+        if (extracted.length) result += sourcesToMarkdown(extracted);
+      }
       pushMessage(tutor.id, { id: uid(), role: 'assistant', content: result, createdAt: new Date().toISOString(), subjectId: sub.id });
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         if (streamRef.current) pushMessage(tutor.id, { id: uid(), role: 'assistant', content: `${streamRef.current}\n\n*Generación detenida por ti.*`, createdAt: new Date().toISOString(), subjectId: sub.id });
+      } else if (useOnline && isBalanceError(e)) {
+        toast('warning', 'Búsqueda :online requiere saldo en OpenRouter', TAVILY_HINT);
+        pushMessage(tutor.id, {
+          id: uid(), role: 'assistant', createdAt: new Date().toISOString(), subjectId: sub.id,
+          content: `**La búsqueda integrada \`:online\` de OpenRouter devolvió falta de saldo.**\n\nPara buscar en internet gratis sin gastar créditos:\n1. Crea una clave gratuita en **app.tavily.com**.\n2. Pégala en **Ajustes → Tavily API Key**.\n3. Vuelve a enviar tu pregunta con **🌐 Web** encendido (o apágalo para chatear al instante).`,
+        });
       } else {
         const err = e instanceof AIError ? e : new AIError('Error inesperado al hablar con la IA.');
         pushMessage(tutor.id, { id: uid(), role: 'assistant', error: true, createdAt: new Date().toISOString(), subjectId: sub.id, content: `**${err.message}**${err.hint ? `\n\n${err.hint}` : ''}\n\nRevisa **Ajustes → Inteligencia Artificial**.` });
         toast('error', err.message, err.hint);
       }
-    } finally { setSending(false); setStream(''); abortRef.current = null; }
+    } finally { setSearchingWeb(false); setSending(false); setStream(''); abortRef.current = null; }
   };
 
   const generateRaster = async (p: PromptParams, tutorId: string | null = activeTutorId) => {
@@ -490,7 +551,7 @@ export function Chat({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
               {sending && (
                 <div className="message message--ai">
                   <div className="message__avatar"><Bot size={16} /></div>
-                  <div className="message__bubble"><div className="message__meta"><strong>{activeTutor.name}</strong><span>en vivo</span></div>{stream ? <Markdown text={stream} /> : <div className="typing"><span /><span /><span /> Escribiendo…</div>}<span className="stream-caret" /></div>
+                  <div className="message__bubble"><div className="message__meta"><strong>{activeTutor.name}</strong><span>{searchingWeb ? 'web' : 'en vivo'}</span></div>{stream ? <Markdown text={stream} /> : <div className="typing"><span /><span /><span /> {searchingWeb ? 'Buscando en internet…' : 'Escribiendo…'}</div>}<span className="stream-caret" /></div>
                 </div>
               )}
             </div>
@@ -508,25 +569,38 @@ export function Chat({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
               <div className="recording-bar"><span className="recording-bar__dot" /><strong>Grabando {formatClock(recSeconds)}</strong>{dictation && <span className="recording-bar__dictation">“{dictation.slice(0, 90)}…”</span>}<Button size="sm" variant="primary" icon={<Square size={13} />} onClick={() => recorderRef.current?.stop()}>Detener y adjuntar</Button><Button size="sm" variant="ghost" onClick={cancelRecording}>Cancelar</Button></div>
             )}
 
-            <div className="composer" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); addFiles(Array.from(e.dataTransfer.files || [])); }}>
+            {settings.webSearch && (
+              <div className="web-pill-row">
+                <span className="web-pill glass">
+                  <Globe size={13} /> 🌐 Búsqueda web activa
+                  <button type="button" aria-label="Apagar búsqueda web" onClick={() => toggleWebSearch(false)}><X size={12} /></button>
+                </span>
+              </div>
+            )}
+
+            <div className="composer composer--capsule" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); addFiles(Array.from(e.dataTransfer.files || [])); }}>
               <div className="dropdown composer-plus" ref={plusRef}>
-                <IconButton label="Añadir archivos, audio o apuntes" className="composer-plus__btn" onClick={() => setPlusOpen((v) => !v)}><Plus size={19} /></IconButton>
+                <IconButton label="Acciones del chat y búsqueda web" className={`composer-plus__btn ${plusOpen ? 'is-open' : ''}`} onClick={() => setPlusOpen((v) => !v)}><Plus size={19} /></IconButton>
                 {plusOpen && (
                   <div className="composer-menu glass">
-                    <span className="dropdown__label">Enviar a {activeTutor.name}</span>
-                    <button onClick={() => { fileRef.current?.click(); setPlusOpen(false); }}><FilePlus2 size={15} /><span><strong>Subir archivos</strong><small>PDF, imágenes, DOCX, XLSX, PPTX, TXT… todo menos videos</small></span></button>
-                    <button onClick={() => void startRecording()}><Mic size={15} /><span><strong>Grabar audio</strong><small>Nota de voz con dictado / transcripción</small></span></button>
-                    <button onClick={() => { setAttachOpen(true); setPlusOpen(false); }}><FolderOpen size={15} /><span><strong>Adjuntar apunte</strong><small>Solo apuntes de {subject?.name}</small></span></button>
-                    <button onClick={() => void pasteImage()}><Clipboard size={15} /><span><strong>Pegar imagen</strong><small>Desde el portapapeles</small></span></button>
-                    <button onClick={() => { setTab('biblioteca'); setPlusOpen(false); }}><LibraryBig size={15} /><span><strong>Ver biblioteca</strong><small>Archivos de esta materia</small></span></button>
+                    <span className="dropdown__label">Acciones · {activeTutor.name}</span>
+                    <button type="button" onClick={() => { fileRef.current?.click(); setPlusOpen(false); }}><ImagePlus size={15} /><span><strong>Subir imagen / Foto del cuaderno</strong><small>Analiza apuntes o sube PDF, DOCX, XLSX, PPTX, TXT…</small></span></button>
+                    <button type="button" className={`composer-menu__web ${settings.webSearch ? 'is-on' : ''}`} role="switch" aria-checked={Boolean(settings.webSearch)} onClick={() => toggleWebSearch()}>
+                      <Globe size={15} />
+                      <span><strong>Búsqueda en la Web</strong><small>{settings.tavilyKey?.trim() ? 'Tavily gratuito listo · busca datos al día' : 'OpenRouter :online · datos actualizados'}</small></span>
+                      <i className={`composer-switch ${settings.webSearch ? 'is-on' : ''}`} aria-hidden="true" />
+                    </button>
+                    <button type="button" onClick={() => void startRecording()}><Mic size={15} /><span><strong>Grabar audio</strong><small>Nota de voz con dictado / transcripción</small></span></button>
+                    <button type="button" onClick={() => { setAttachOpen(true); setPlusOpen(false); }}><FolderOpen size={15} /><span><strong>Adjuntar apunte</strong><small>Solo apuntes de {subject?.name}</small></span></button>
+                    <button type="button" onClick={() => void pasteImage()}><Clipboard size={15} /><span><strong>Pegar imagen</strong><small>Desde el portapapeles</small></span></button>
+                    <button type="button" onClick={() => { setTab('biblioteca'); setPlusOpen(false); }}><LibraryBig size={15} /><span><strong>Ver biblioteca</strong><small>Archivos de esta materia</small></span></button>
                   </div>
                 )}
               </div>
               <input ref={fileRef} type="file" multiple hidden onChange={onFileInput} />
               <textarea className="composer__input" rows={1} value={input} placeholder={`Pregúntale al tutor de ${subject?.name}… (Enter envía)`} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }} />
-              <IconButton label="Grabar audio" onClick={() => void startRecording()} className={recording ? 'is-recording' : ''}><Mic size={17} /></IconButton>
               {sending ? <Button variant="danger" size="sm" icon={<Square size={13} />} onClick={() => abortRef.current?.abort()}>Detener</Button>
-                : <Button variant="primary" icon={<Send size={15} />} onClick={() => void send(input)} disabled={!input.trim() && !pendingImages.length && !pendingItems.length}>Enviar</Button>}
+                : <Button variant="primary" className="composer__send" icon={<Send size={15} />} onClick={() => void send(input)} disabled={!input.trim() && !pendingImages.length && !pendingItems.length}>Enviar</Button>}
             </div>
             <div className="composer__foot"><span><Wand2 size={12} /> Recursos con copiar · previsualizar · descargar. Cada respuesta tiene 🔊.</span><span><Volume2 size={12} /> Text to speech activo</span></div>
           </>

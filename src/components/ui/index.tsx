@@ -193,6 +193,10 @@ export function Markdown({ text }: { text: string }) {
     let s = text
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => {
+        const safeUrl = String(url).replace(/&amp;/g, '&').replace(/"/g, '%22').replace(/</g, '%3C').replace(/>/g, '%3E');
+        return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+      })
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|\n)###\s+([^\n]+)/g, '$1<h4>$2</h4>')
       .replace(/(^|\n)##\s+([^\n]+)/g, '$1<h3>$2</h3>')

@@ -11,10 +11,14 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const useProxy = env.VITE_AI_PROXY === '1';
   const clientKey = useProxy ? '' : (env.VITE_AI_API_KEY || '');
+  const clientTavilyKey = useProxy ? '' : (env.VITE_TAVILY_API_KEY || '');
 
   return {
     plugins: [react()],
-    define: { __CLIENT_AI_KEY__: JSON.stringify(clientKey) },
+    define: {
+      __CLIENT_AI_KEY__: JSON.stringify(clientKey),
+      __CLIENT_TAVILY_KEY__: JSON.stringify(clientTavilyKey),
+    },
     server: {
       host: '0.0.0.0',
       port: 5173,

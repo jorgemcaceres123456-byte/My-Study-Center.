@@ -23,24 +23,28 @@ function dataUrlToBlob(dataUrl: string): Blob {
 
 export async function exportBackup(state: AppState) {
   const blobs: BackupFile['blobs'] = [];
-  for (const img of state.images) {
-    const blob = await getBlob(img.blobKey).catch(() => undefined);
-    if (blob) blobs.push({ key: img.blobKey, dataUrl: await blobToDataUrl(blob) });
+  const seen = new Set<string>();
+  const archives = state.archives || [];
+  const archivedImages = archives.flatMap((a) => a.data?.images || []);
+  const archivedFiles = archives.flatMap((a) => a.data?.chatFiles || []);
+  const archivedMessages = archives.flatMap((a) => Object.values(a.data?.tutorMessages || {}).flat());
+  const addBlob = async (key: string) => {
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const blob = await getBlob(key).catch(() => undefined);
+    if (blob) blobs.push({ key, dataUrl: await blobToDataUrl(blob) });
+  };
+  for (const img of [...state.images, ...archivedImages]) {
+    await addBlob(img.blobKey);
   }
   // Files sent from the chat (PDF, DOCX, XLSX, PPTX, audio, imágenes…).
-  for (const f of state.chatFiles || []) {
-    const blob = await getBlob(f.blobKey).catch(() => undefined);
-    if (blob) blobs.push({ key: f.blobKey, dataUrl: await blobToDataUrl(blob) });
-  }
+  for (const f of [...(state.chatFiles || []), ...archivedFiles]) await addBlob(f.blobKey);
   // Also keep images generated in the chat and audio clips.
-  for (const msg of allTutorMessages(state)) {
+  for (const msg of [...allTutorMessages(state), ...archivedMessages]) {
     const keys = [msg.imageKey, ...(msg.audios || []).map((a) => a.blobKey)].filter(Boolean) as string[];
-    for (const key of keys) {
-      const blob = await getBlob(key).catch(() => undefined);
-      if (blob) blobs.push({ key, dataUrl: await blobToDataUrl(blob) });
-    }
+    for (const key of keys) await addBlob(key);
   }
-  const file: BackupFile = { app: 'my-study-center', version: state.version || 3, exportedAt: new Date().toISOString(), state, blobs };
+  const file: BackupFile = { app: 'my-study-center', version: state.version || 4, exportedAt: new Date().toISOString(), state, blobs };
   const stamp = new Date().toISOString().slice(0, 10);
   await downloadBlob(new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' }), `my-study-center-respaldo-${stamp}.json`);
   return { images: blobs.length };
