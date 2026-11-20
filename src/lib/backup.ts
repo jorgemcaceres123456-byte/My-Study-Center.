@@ -1,6 +1,7 @@
 import type { AppState } from '../types';
 import { blobToDataUrl, clearBlobs, deleteBlob, getBlob, putBlob } from './imageStore';
 import { downloadBlob, uid } from './utils';
+import { allTutorMessages } from './tutors';
 
 interface BackupFile {
   app: 'my-study-center';
@@ -32,14 +33,14 @@ export async function exportBackup(state: AppState) {
     if (blob) blobs.push({ key: f.blobKey, dataUrl: await blobToDataUrl(blob) });
   }
   // Also keep images generated in the chat and audio clips.
-  for (const msg of state.messages) {
+  for (const msg of allTutorMessages(state)) {
     const keys = [msg.imageKey, ...(msg.audios || []).map((a) => a.blobKey)].filter(Boolean) as string[];
     for (const key of keys) {
       const blob = await getBlob(key).catch(() => undefined);
       if (blob) blobs.push({ key, dataUrl: await blobToDataUrl(blob) });
     }
   }
-  const file: BackupFile = { app: 'my-study-center', version: 1, exportedAt: new Date().toISOString(), state, blobs };
+  const file: BackupFile = { app: 'my-study-center', version: state.version || 3, exportedAt: new Date().toISOString(), state, blobs };
   const stamp = new Date().toISOString().slice(0, 10);
   await downloadBlob(new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' }), `my-study-center-respaldo-${stamp}.json`);
   return { images: blobs.length };

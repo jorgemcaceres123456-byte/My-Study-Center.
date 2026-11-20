@@ -9,6 +9,7 @@ import { Library } from './features/library/Library';
 import { Biblioteca } from './features/biblioteca/Biblioteca';
 import { Sessions } from './features/sessions/Sessions';
 import { Chat } from './features/chat/Chat';
+import { Exercises } from './features/exercises/Exercises';
 import { Calendar } from './features/calendar/Calendar';
 import { Habits } from './features/habits/Habits';
 import { Settings } from './features/settings/Settings';
@@ -17,7 +18,7 @@ import { useReminders } from './lib/reminders';
 import type { SectionId } from './types';
 
 const SECTION_KEY = 'my-study-center:section';
-const VALID: SectionId[] = ['dashboard', 'subjects', 'library', 'biblioteca', 'chat', 'sessions', 'calendar', 'habits', 'settings'];
+const VALID: SectionId[] = ['dashboard', 'subjects', 'library', 'biblioteca', 'chat', 'exercises', 'sessions', 'calendar', 'habits', 'settings'];
 
 export default function App() {
   const { state } = useStore();
@@ -52,6 +53,7 @@ export default function App() {
           {section === 'library' && <Library onNavigate={navigate} />}
           {section === 'biblioteca' && <Biblioteca onNavigate={navigate} />}
           {section === 'chat' && <Chat onNavigate={navigate} />}
+          {section === 'exercises' && <Exercises onNavigate={navigate} />}
           {section === 'sessions' && <Sessions />}
           {section === 'calendar' && <Calendar />}
           {section === 'habits' && <Habits />}

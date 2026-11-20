@@ -48,9 +48,9 @@ export function Dashboard({ onNavigate }: { onNavigate: (s: SectionId) => void }
     const t = d.tasks.find((x) => x.id === id);
     if (t) { t.done = !t.done; t.completedAt = t.done ? new Date().toISOString() : undefined; }
   });
-  const askAI = (prompt: string) => {
+  const askAI = (prompt: string, subjectId?: string) => {
     onNavigate('chat');
-    window.setTimeout(() => window.dispatchEvent(new CustomEvent('msc:chat-prompt', { detail: prompt })), 80);
+    window.setTimeout(() => window.dispatchEvent(new CustomEvent('msc:chat-prompt', { detail: { prompt, subjectId } })), 80);
   };
 
   return (
@@ -61,7 +61,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (s: SectionId) => void }
           <h2>{greeting}, <span className="grad-text">vamos a avanzar</span> 👋</h2>
           <p>Tu progreso, tus apuntes y tus entregas en un solo lugar. Todo se guarda automáticamente.</p>
           <div className="hero__actions">
-            <Button variant="primary" icon={<Sparkles size={16} />} onClick={() => askAI('Con base en mi avance y mis próximas entregas, ¿qué debería estudiar hoy y con qué método?')}>Plan de estudio de hoy</Button>
+            <Button variant="primary" icon={<Sparkles size={16} />} onClick={() => askAI('Con base en MIS apuntes, tareas y próximas entregas de esta materia, ¿qué debería estudiar hoy y con qué método?', [...stats].sort((a, b) => a.percent - b.percent)[0]?.subject.id)}>Plan de estudio de hoy</Button>
             <Button icon={<Settings2 size={16} />} onClick={() => setSelectorOpen(true)}>Elegir materias del pentágono</Button>
           </div>
         </div>
@@ -169,7 +169,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (s: SectionId) => void }
           <div className="recent-notes">
             {state.images.length === 0 && <EmptyState icon={<Images size={26} />} title="Aún no hay apuntes" description="Sube fotos de tu cuaderno para darle contexto real a la IA." />}
             {state.images.slice(0, 3).map((img) => (
-              <button key={img.id} className="recent-note" onClick={() => onNavigate('library')}>
+              <button key={img.id} className="recent-note" onClick={() => { if (img.subjectId) localStorage.setItem('my-study-center:library-subject', img.subjectId); else localStorage.removeItem('my-study-center:library-subject'); onNavigate('library'); }}>
                 <BlobImage blobKey={img.blobKey} alt={img.name} />
                 <span><strong>{img.name}</strong><small>{state.subjects.find((s) => s.id === img.subjectId)?.name || 'Sin materia'} · {shortDate(new Date(img.createdAt))}</small></span>
                 {img.aiSummary && <i title="Analizado por IA"><Sparkles size={13} /></i>}

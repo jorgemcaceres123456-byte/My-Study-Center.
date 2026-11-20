@@ -101,7 +101,8 @@ export function Settings() {
           <Field label="Instrucción personal"><textarea className="textarea" rows={2} value={s.persona} onChange={(e) => set('persona', e.target.value)} /></Field>
 
           <Toggle checked={s.vision} onChange={(v) => set('vision', v)} label="Enviar imágenes al modelo (visión)" description="Necesario para analizar las fotos de tu cuaderno y para adjuntar páginas al chat." />
-          <Toggle checked={s.autoAbsorb} onChange={(v) => set('autoAbsorb', v)} label="Absorber fotos automáticamente" description="Al subir una página a Fotos y apuntes, la IA la analiza y la graba en su memoria sin que tengas que pulsar nada." />
+          <Toggle checked={s.autoAbsorb} onChange={(v) => set('autoAbsorb', v)} label="Absorber fotos automáticamente" description="Al subir una página a Fotos y apuntes, la IA la analiza y la graba SOLO en la memoria del tutor de esa materia." />
+          <Toggle checked={s.dailyQuizzes !== false} onChange={(v) => set('dailyQuizzes', v)} label="Crear ejercicios diarios automáticamente" description="Cada día se genera un quiz A/B/C/D por materia con los temas alimentados a su tutor, más el test de inglés MCER. Puedes regenerarlos cuando quieras." />
 
           <div className="settings-card__actions">
             <Button variant="primary" icon={testing ? <LoaderCircle size={15} className="spin" /> : <Zap size={15} />} disabled={testing} onClick={() => void doTest()}>{testing ? 'Probando…' : 'Probar conexión'}</Button>

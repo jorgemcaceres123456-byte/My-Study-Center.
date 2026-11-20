@@ -1,5 +1,6 @@
 import type { AppState, Subject, Task, CalendarEvent, Habit } from '../types';
 import { addDays, dateKey, toLocalInput, uid } from '../lib/utils';
+import { ensureTutors } from '../lib/tutors';
 
 /**
  * API Key solicitada por el usuario. Se inyecta en tiempo de BUILD desde
@@ -33,6 +34,7 @@ export const defaultSettings: AppState['settings'] = {
   imageModel: 'google/gemini-2.5-flash-image-preview',
   transcribeModel: 'whisper-1',
   autoAbsorb: true,
+  dailyQuizzes: true,
   ttsRate: 1,
   ttsVoice: '',
   persona: 'Responde siempre en español, con un tono cercano, claro y motivador.',
@@ -48,9 +50,11 @@ export const MODEL_SUGGESTIONS: Record<AppState['settings']['provider'], string[
 /** Estado inicial: COMPLETAMENTE VACÍO. Todo se crea manualmente. */
 export function createEmptyState(): AppState {
   return {
-    version: 2,
-    subjects: [], tasks: [], images: [], chatFiles: [], memories: [],
-    sessions: [], activeSession: null, events: [], habits: [], messages: [],
+    version: 3,
+    subjects: [], tutors: [], tutorMessages: {}, messages: [],
+    tasks: [], images: [], chatFiles: [], memories: [],
+    sessions: [], activeSession: null, events: [], habits: [],
+    quizzes: [], quizAttempts: {}, englishLevel: 'B1',
     pentagonSubjectIds: [],
     settings: { ...defaultSettings },
     accent: 'aurora',
@@ -130,7 +134,7 @@ export function createDemoState(): AppState {
     dates: offsets.map((o) => dateKey(addDays(now, -o))),
   }));
 
-  return {
+  return ensureTutors({
     ...createEmptyState(),
     subjects,
     tasks,
@@ -138,7 +142,7 @@ export function createDemoState(): AppState {
     habits,
     pentagonSubjectIds: ['s-math', 's-phys', 's-bio', 's-hist', 's-prog'],
     seeded: true,
-  };
+  });
 }
 
 /** Pretty inline SVG "notes" used as editable sample pages in the library. */

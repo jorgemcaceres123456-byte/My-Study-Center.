@@ -1,4 +1,4 @@
-import type { AISettings, AppState } from '../types';
+import type { AISettings, AppState, ID } from '../types';
 import { USE_PROXY } from '../data/defaults';
 import { blobToDataUrl } from './imageStore';
 import { dateKey, parseLocal, pct, plural, sessionStreak, shortDate } from './utils';
@@ -30,8 +30,77 @@ Para guías de examen usa este orden: 1) conceptos clave, 2) resumen claro, 3) e
 Para métodos de estudio adapta la recomendación al tema, la dificultad y el tiempo disponible, y explica por qué ese método conviene.
 Nunca inventes haber visto el contenido de una imagen, PDF o archivo si no recibiste el contenido o su resumen; usa solo el contexto disponible.`;
 
-/** Contexto REAL: materias, tareas, memoria de páginas, archivos, sesiones, entregas y hábitos. */
-export function buildSystemPrompt(state: AppState): string {
+
+/**
+ * Prompt de un TUTOR DE MATERIA. Aislamiento estricto:
+ * solo ve apuntes, memorias, archivos, tareas y entregas de SU materia.
+ * Nunca recibe los nombres ni los contenidos de las demás materias.
+ */
+export function buildTutorSystemPrompt(state: AppState, subjectId: ID): string {
+  const subject = state.subjects.find((x) => x.id === subjectId);
+  if (!subject) return buildSystemPrompt(state);
+  const s = state.settings;
+  const own = <T extends { subjectId: ID | '' }>(arr: T[]) => arr.filter((x) => x.subjectId === subjectId);
+
+  const tasks = own(state.tasks);
+  const done = tasks.filter((t) => t.done);
+  const pending = tasks.filter((t) => !t.done);
+  const memories = own(state.memories);
+  const pages = own(state.images);
+  const files = own(state.chatFiles);
+  const events = [...own(state.events)].sort((a, b) => parseLocal(a.date).getTime() - parseLocal(b.date).getTime());
+  const sessions = own(state.sessions);
+  const minutes = Math.round(sessions.reduce((n, x) => n + x.durationSec, 0) / 60);
+
+  const memoryText = memories.map((m) =>
+    `### ${m.name} · ${shortDate(new Date(m.createdAt))}\n${m.summary}`).join('\n\n').slice(0, 20000);
+  const pagesText = pages.slice(0, 40).map((i) =>
+    `- "${i.name}" · ${shortDate(new Date(i.createdAt))} · etiquetas: ${i.tags.join(', ') || '—'} · notas: ${i.notes || '—'}${i.aiSummary ? ` · RESUMEN IA: ${i.aiSummary}` : ''}`).join('\n');
+  const filesText = files.slice(-12).map((f) =>
+    `- "${f.name}" [${f.kind}] · ${shortDate(new Date(f.createdAt))}${f.extractedText ? `\nCONTENIDO:\n${f.extractedText.slice(0, 1800)}` : ''}`).join('\n\n').slice(0, 18000);
+  const deadlines = events.filter((e) => !e.done).slice(0, 20).map((e) =>
+    `- ${e.date.replace('T', ' ')} · ${e.title} (${e.type})${e.description ? `: ${e.description}` : ''}`).join('\n');
+  const pastEvents = events.filter((e) => e.done).slice(-5).map((e) =>
+    `- ${e.date.replace('T', ' ')} · ${e.title} (completada)`).join('\n');
+
+  return `Eres **${`Tutor de ${subject.name}`}**, el asistente de IA EXCLUSIVO de la materia «${subject.name}» (carpeta: ${subject.folder || 'sin carpeta'}) en "My Study Center". ${s.persona || 'Responde siempre en español.'}
+
+🚫 REGLA DE AISLAMIENTO (la más importante):
+- SOLO tienes acceso a los apuntes, temas, tareas, archivos y fechas de entrega de «${subject.name}».
+- NO conoces el contenido de ninguna otra materia. No inventes, no mezcles, no cites ni compares con otras materias.
+- Si te preguntan por otra materia o por apuntes que no están en tu memoria, responde con honestidad: «No tengo acceso a esa materia; abre su propio tutor en Chat de IA». Nunca respondas usando datos de otras materias.
+- El usuario sube las fotos de su cuaderno en «Fotos y apuntes» eligiendo la materia; las de ${subject.name} son las ÚNICAS que tú recuerdas.
+
+🧠 MEMORIA: las páginas analizadas quedan grabadas aquí. Recuérdalas en TODAS las conversaciones de este chat aunque no las adjunten de nuevo. Cita el nombre de la página cuando uses su contenido. Si te preguntan qué recuerdas, responde solo con tu memoria.
+
+📅 FECHAS: cuando te pregunten por entregas, exámenes o proyectos, usa EXCLUSIVAMENTE la lista de «ENTREGAS DE ESTA MATERIA» y la fecha de hoy para calcular cuánto falta. Esas fechas las puso el usuario en el Calendario eligiendo esta materia.
+
+HOY: ${dateKey(new Date())}
+
+AVANCE DE «${subject.name}»:
+- Tareas: ${plural(done.length, 'hecha', 'hechas')} de ${tasks.length} (${pct(done.length, tasks.length)}%).
+- Pendientes: ${pending.map((t) => t.title).join(', ') || 'ninguna'}.
+- Sesiones de estudio registradas en esta materia: ${plural(sessions.length, 'sesión', 'sesiones')}, ${minutes} minutos en total.
+
+🧠 MEMORIA DE MIS APUNTES (temas que me alimentaron):
+${memoryText || 'Aún no se ha analizado ninguna página de esta materia. Pide al usuario que suba fotos en Fotos y apuntes → ' + subject.name + '.'}
+
+PÁGINAS SUBIDAS EN ESTA MATERIA:
+${pagesText || 'Aún no hay páginas subidas.'}
+
+ARCHIVOS QUE ME ENVIARON EN ESTE CHAT:
+${filesText || 'Aún no se han enviado archivos.'}
+
+ENTREGAS DE ESTA MATERIA (calendario):
+${deadlines || 'Sin entregas pendientes en esta materia.'}
+${pastEvents ? `\nENTREGAS YA COMPLETADAS:\n${pastEvents}` : ''}
+
+${ARTIFACT_RULES}`;
+}
+
+/** Contexto global (compatibilidad / vista general). Los tutores usan buildTutorSystemPrompt. */
+export function buildSystemPrompt(state: AppState, subjectId?: ID): string {
+  if (subjectId) return buildTutorSystemPrompt(state, subjectId);
   const s = state.settings;
   const subjectLine = state.subjects.map((sub) => {
     const total = state.tasks.filter((t) => t.subjectId === sub.id).length;
@@ -289,7 +358,7 @@ export async function testConnection(settings: AISettings): Promise<string> {
 }
 
 /** "Absorbe" una página: el modelo con visión lee la imagen y escribe un recuerdo durable. */
-export async function analyzeImage(settings: AISettings, blob: Blob, name: string): Promise<string> {
+export async function analyzeImage(settings: AISettings, blob: Blob, name: string, subjectName = ''): Promise<string> {
   // Comprimimos antes de enviar: reduce coste y evita el límite de tamaño del proxy.
   const small = await resizeBlobForVision(blob);
   const dataUrl = await blobToDataUrl(small);
@@ -297,7 +366,7 @@ export async function analyzeImage(settings: AISettings, blob: Blob, name: strin
     settings: { ...settings, vision: true },
     turns: [
       { role: 'system', content: 'Eres un asistente de apuntes. Analiza la imagen y devuelve en español: 1) un resumen detallado de 6-10 líneas del contenido (fórmulas, definiciones, esquemas, ejercicios, todo lo que veas), 2) los conceptos/temas clave separados por comas, 3) 3 preguntas de repaso. No uses bloques de código. Sé concreto y fiel a lo que ves. Este texto se guardará como memoria permanente para futuras conversaciones.' },
-      { role: 'user', content: `Analiza esta página de mi cuaderno llamada "${name}" y recuerda su contenido para futuras conversaciones.`, images: [{ mime: small.type || 'image/jpeg', dataUrl }] },
+      { role: 'user', content: `Analiza esta página de mi cuaderno llamada "${name}"${subjectName ? `, de la materia ${subjectName}` : ''} y recuerda su contenido para futuras conversaciones con el tutor de esa materia.`, images: [{ mime: small.type || 'image/jpeg', dataUrl }] },
     ],
   });
 }

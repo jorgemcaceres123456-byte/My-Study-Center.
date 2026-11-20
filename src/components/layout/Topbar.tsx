@@ -12,6 +12,7 @@ const QUICK_ADD: Array<{ type: string; label: string; section: SectionId; icon: 
   { type: 'task', label: 'Nueva tarea', section: 'subjects', icon: '✓' },
   { type: 'event', label: 'Nueva entrega', section: 'calendar', icon: '📅' },
   { type: 'image', label: 'Subir apuntes', section: 'library', icon: '🖼️' },
+  { type: 'quiz', label: 'Nuevo quiz diario', section: 'exercises', icon: '🧠' },
   { type: 'habit', label: 'Nuevo hábito', section: 'habits', icon: '🔥' },
   { type: 'session', label: 'Registrar sesión', section: 'sessions', icon: '⏱️' },
 ];
